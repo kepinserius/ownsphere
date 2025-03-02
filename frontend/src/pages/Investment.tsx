@@ -11,8 +11,18 @@ interface InvestmentProps {
   ownSphere: OwnSphereActor;
 }
 
-// Data pasar simulasi untuk tampilan
-const marketData = [
+interface CryptoData {
+  id: string;
+  name: string;
+  symbol: string;
+  current_price: number;
+  price_change_percentage_24h: number;
+  image: string;
+  last_updated: string;
+}
+
+// Data pasar default jika API gagal
+const defaultMarketData = [
   {
     name: "OwnSphere Token",
     value: "$2.45",
@@ -63,17 +73,48 @@ const investmentSuggestions = [
 
 const Investment: React.FC<InvestmentProps> = ({ ownSphere }) => {
   const [loading, setLoading] = useState(false);
+  const [marketLoading, setMarketLoading] = useState(false);
   const [tokenBalance, setTokenBalance] = useState(0);
   const [suggestion, setSuggestion] = useState("");
   const [userId, setUserId] = useState("");
   const [amount, setAmount] = useState(1);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [marketData, setMarketData] = useState<any[]>(defaultMarketData);
+  const [apiSource, setApiSource] = useState("coingecko");
+  const [refreshInterval, setRefreshInterval] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
+  const [apiError, setApiError] = useState<string | null>(null);
 
   // Simulasi user ID untuk demo
   useEffect(() => {
     // Dalam aplikasi nyata, userId akan diambil dari state global atau localStorage
-    setUserId("demo-user");
+    const storedUserId = localStorage.getItem("userId");
+    if (storedUserId) {
+      setUserId(storedUserId);
+    } else {
+      setUserId("demo-user");
+    }
+
     fetchTokenBalance();
+    fetchMarketData();
+
+    // Load pengaturan API dari localStorage
+    const savedSettings = localStorage.getItem("marketApiSettings");
+    if (savedSettings) {
+      try {
+        const settings = JSON.parse(savedSettings);
+        setApiSource(settings.apiSource || "coingecko");
+      } catch (e) {
+        console.error("Error loading API settings:", e);
+      }
+    }
+
+    return () => {
+      // Bersihkan interval saat komponen unmount
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+      }
+    };
   }, []);
 
   const fetchTokenBalance = async () => {
@@ -116,6 +157,165 @@ const Investment: React.FC<InvestmentProps> = ({ ownSphere }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchMarketData = async () => {
+    setMarketLoading(true);
+    setApiError(null);
+
+    try {
+      let data;
+
+      if (apiSource === "coingecko") {
+        // Menggunakan CoinGecko API
+        const response = await fetch(
+          "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,internet-computer,solana&order=market_cap_desc&per_page=10&page=1&sparkline=false&price_change_percentage=24h"
+        );
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
+
+        const apiData: CryptoData[] = await response.json();
+
+        // Transformasi data API ke format yang dibutuhkan
+        data = apiData.map((coin) => {
+          const priceChange = coin.price_change_percentage_24h;
+          const trend =
+            priceChange > 0 ? "up" : priceChange < 0 ? "down" : "neutral";
+
+          return {
+            name: coin.name,
+            value: `$${coin.current_price.toLocaleString()}`,
+            change: `${priceChange > 0 ? "+" : ""}${priceChange.toFixed(2)}%`,
+            trend,
+            icon: getIconForCoin(coin.id),
+            lastUpdated: new Date(coin.last_updated).toLocaleTimeString(
+              "id-ID",
+              {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false,
+              }
+            ),
+          };
+        });
+
+        // Tambahkan OwnSphere Token (simulasi)
+        data.unshift({
+          name: "OwnSphere Token",
+          value: "$2.45",
+          change: "+5.2%",
+          trend: "up",
+          icon: "fa-coins",
+          lastUpdated: new Date().toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }),
+        });
+      } else {
+        // Fallback ke data default
+        data = defaultMarketData.map((item) => ({
+          ...item,
+          lastUpdated: new Date().toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }),
+        }));
+      }
+
+      setMarketData(data);
+      setLastUpdated(
+        new Date().toLocaleString("id-ID", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+      );
+    } catch (error) {
+      console.error("Gagal mengambil data pasar:", error);
+      setApiError("Gagal mengambil data pasar. Menggunakan data default.");
+
+      // Fallback ke data default jika API gagal
+      setMarketData(
+        defaultMarketData.map((item) => ({
+          ...item,
+          lastUpdated: new Date().toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }),
+        }))
+      );
+    } finally {
+      setMarketLoading(false);
+    }
+  };
+
+  const getIconForCoin = (coinId: string): string => {
+    switch (coinId) {
+      case "bitcoin":
+        return "fa-bitcoin-sign";
+      case "ethereum":
+        return "fa-ethereum";
+      case "internet-computer":
+        return "fa-globe";
+      case "solana":
+        return "fa-sun";
+      default:
+        return "fa-coins";
+    }
+  };
+
+  const startAutoRefresh = () => {
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+    }
+
+    // Refresh data setiap 1 detik
+    const interval = window.setInterval(() => {
+      fetchMarketData();
+    }, 1000);
+
+    setRefreshInterval(interval);
+  };
+
+  const stopAutoRefresh = () => {
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+      setRefreshInterval(null);
+    }
+  };
+
+  const toggleAutoRefresh = () => {
+    if (refreshInterval) {
+      stopAutoRefresh();
+    } else {
+      startAutoRefresh();
+    }
+  };
+
+  const changeApiSource = (source: string) => {
+    setApiSource(source);
+
+    // Simpan pengaturan di localStorage
+    localStorage.setItem(
+      "marketApiSettings",
+      JSON.stringify({ apiSource: source })
+    );
+
+    // Refresh data dengan sumber baru
+    fetchMarketData();
   };
 
   return (
@@ -182,9 +382,65 @@ const Investment: React.FC<InvestmentProps> = ({ ownSphere }) => {
           </div>
         </div>
 
-        <h3>
-          <i className="fas fa-globe"></i> Data Pasar
-        </h3>
+        <div className="market-header">
+          <h3>
+            <i className="fas fa-globe"></i> Data Pasar
+          </h3>
+          <div className="market-controls">
+            <div className="api-selector">
+              <label>Sumber Data:</label>
+              <select
+                value={apiSource}
+                onChange={(e) => changeApiSource(e.target.value)}
+                className="select-field"
+              >
+                <option value="coingecko">CoinGecko API</option>
+                <option value="default">Data Simulasi</option>
+              </select>
+            </div>
+            <button
+              className={`auto-refresh-button ${
+                refreshInterval ? "active" : ""
+              }`}
+              onClick={toggleAutoRefresh}
+              title={
+                refreshInterval
+                  ? "Nonaktifkan refresh otomatis"
+                  : "Aktifkan refresh otomatis (1 detik)"
+              }
+            >
+              <i
+                className={`fas ${
+                  refreshInterval ? "fa-sync fa-spin" : "fa-clock"
+                }`}
+              ></i>
+              {refreshInterval ? "Auto: Aktif" : "Auto: Nonaktif"}
+            </button>
+            <button
+              className="refresh-button"
+              onClick={fetchMarketData}
+              disabled={marketLoading}
+              title="Perbarui data pasar"
+            >
+              <i
+                className={`fas ${
+                  marketLoading ? "fa-spinner fa-spin" : "fa-sync-alt"
+                }`}
+              ></i>
+            </button>
+          </div>
+        </div>
+
+        {apiError && (
+          <div className="api-error">
+            <i className="fas fa-exclamation-triangle"></i> {apiError}
+          </div>
+        )}
+
+        <div className="last-updated">
+          Terakhir diperbarui: {lastUpdated || "Belum pernah"}
+        </div>
+
         <div className="market-data-grid">
           {marketData.map((item, index) => (
             <div key={index} className={`market-card ${item.trend}`}>
@@ -206,7 +462,8 @@ const Investment: React.FC<InvestmentProps> = ({ ownSphere }) => {
                   {item.change}
                 </div>
                 <div className="market-time">
-                  Terakhir diperbarui: {new Date().toLocaleTimeString()}
+                  Terakhir diperbarui:{" "}
+                  {item.lastUpdated || new Date().toLocaleTimeString()}
                 </div>
               </div>
             </div>
